@@ -8,9 +8,11 @@
 
     // Reichweite in Pixeln, ab wann das Element einrasten soll
     const SNAP_THRESHOLD = 500; 
-    const RING_COUNT = 8; 
+    const RING_COUNT     = 8; 
+    const STEP_TIMEOUT   = 200; 
 
     let isDragging = false;
+    let locked = false;
     let startX = 0;
     let startY = 0;
 
@@ -18,44 +20,10 @@
     let resetY = '0px';
 
 
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
     onMount(() => {
-        // Alle Snap-Ziele aus dem DOM auslesen und ihre Koordinaten speichern
-        targets = Array.from(document.querySelectorAll('.snap-target')).map(el => {
-            return {
-                x: parseInt(el.style.left),
-                y: parseInt(el.style.top),
-                count: 0,
-                items: [] as any[]
-            };
-        });
-
-        // get ring elements
-        rings = [];
-        for(let i = 1; i <= RING_COUNT; i++) {
-            let x = document.getElementById(`ring_${i}`);
-
-            if(x) {
-                x.snappedTo = null;
-                rings.push(x);
-                rings_currentPos[`ring_${i}`] = {
-                    x: 0,
-                    y: 0
-                };
-                x.addEventListener('pointerdown', event_pointerdown);
-                x.addEventListener('pointermove', event_pointermove);
-                x.addEventListener('pointerup', event_pointerup);
-
-
-                x.size = (RING_COUNT - i);
-                x.style.width = `${40 + ((RING_COUNT - i) * 30)}px`;
-                x.style.marginLeft = `${(i * 15)}px`;
-
-                setRingToTarget(`ring_${i}`, targets[0]);
-            }
-
-        }
-
-        console.info(rings);
+        reset();
     });
 
 
@@ -63,7 +31,7 @@
         let draggable  = e.target as HTMLElement;
         let currentPos = rings_currentPos[draggable?.id];
 
-        if(!draggable || !currentPos)
+        if(!draggable || !currentPos || locked)
             return;
 
         if(draggable.snappedTo && draggable.snappedIndex < (draggable.snappedTo.count - 1))
@@ -88,7 +56,7 @@
     function event_pointermove(e: Event) {
         let draggable = e.target as HTMLElement;
 
-        if(!draggable)
+        if(!draggable || locked)
             return;
 
         if (!isDragging)
@@ -118,7 +86,7 @@
         let draggable  = e.target as HTMLElement;
         let currentPos = rings_currentPos[draggable?.id];
 
-        if(!draggable || !currentPos)
+        if(!draggable || !currentPos || locked)
             return;
 
         let currentX = currentPos.x;
@@ -198,11 +166,18 @@
 
     function setRingToTarget(ring_id: string, target: any) {
         let draggable = document.getElementById(`${ring_id}`);
+
+        if(!draggable)
+            return;
+
+        if(draggable.snappedTo) {
+            draggable.snappedTo.count -= 1;
+            draggable.snappedTo.items.pop();
+        }
+
         let currentX  = target.x - 90;
         let currentY  = target.y - (target.count * 42) + 250;
         
-        if(!draggable)
-            return;
 
         rings_currentPos[ring_id] = {
             x: currentX,
@@ -221,26 +196,113 @@
 
 
 
-    function checkWinningCondition(target: any) {
-        if(!target || target.id != 'target_2')
-            return;
+    function checkWinningCondition(target: any): boolean {
+        if(!target || target.id != 'target_3')
+            return false;
 
         if(target.items.length < RING_COUNT)
-            return;
+            return false;
 
         // optional check
         for(let i = 1; i < target.items.length; i++) {
             if(target.items[i] === undefined)
-                return;
+                return false;
             if(target.items[i - 1] === undefined)
-                return;
+                return false;
 
             if(target.items[i - 1] < target.items[i])
-                return;
+                return false;
         }
 
         // won
         alert('You won the Game 🥳');
+        return true;
+    }
+
+    function searchPossiblePart(): number {
+        let x = targets.map(t => t.items[t.count - 1]);
+        x = x.sort().filter(x => x != undefined && x != 0);
+        x = x[0];
+
+        return (Number.isInteger(x) ? x : -1);
+    }
+
+    export async function solve() {
+        if(locked || checkWinningCondition(targets[0]))
+            return;
+
+        locked = true;
+        isDragging = false;
+
+        let currentTarget;
+        let currentRing;
+        do {
+
+            currentRing = rings[rings.length - 1];
+            let i = targets.indexOf(currentRing.snappedTo) + 1;
+            currentTarget = targets[(i >= targets.length ? 0: i)];
+
+            setRingToTarget(currentRing.id, currentTarget);
+            await delay(STEP_TIMEOUT);
+
+            currentRing = rings[rings.length - 1 - searchPossiblePart()];
+            if(currentRing) {
+                i = targets.indexOf(currentRing.snappedTo) + 1;
+                if(i >= targets.length)
+                    i = 0;
+
+                currentTarget = targets[i];
+                if(currentTarget.items[currentTarget.items.length - 1] < currentRing.size) {
+                    i++;
+                    currentTarget = targets[(i >= targets.length ? 0: i)];
+                }
+
+                setRingToTarget(currentRing.id, currentTarget);
+                await delay(STEP_TIMEOUT);
+            }
+        } while(!checkWinningCondition(currentTarget) && locked);
+
+        locked = false;
+    }
+
+    export async function reset() {
+        locked = false;
+
+        // Alle Snap-Ziele aus dem DOM auslesen und ihre Koordinaten speichern
+        targets = Array.from(document.querySelectorAll('.snap-target')).map((el, i) => {
+            return {
+                x: parseInt(el.style.left),
+                y: parseInt(el.style.top),
+                id: el.id,
+                count: 0,
+                items: [] as any[]
+            };
+        });
+
+        // get ring elements
+        rings = [];
+        for(let i = 1; i <= RING_COUNT; i++) {
+            let x = document.getElementById(`ring_${i}`);
+
+            if(x) {
+                x.snappedTo = null;
+                rings.push(x);
+                rings_currentPos[`ring_${i}`] = {
+                    x: 0,
+                    y: 0
+                };
+                x.addEventListener('pointerdown', event_pointerdown);
+                x.addEventListener('pointermove', event_pointermove);
+                x.addEventListener('pointerup', event_pointerup);
+
+
+                x.size = (RING_COUNT - i);
+                x.style.width = `${40 + ((RING_COUNT - i) * 30)}px`;
+                x.style.marginLeft = `${(i * 15)}px`;
+
+                setRingToTarget(`ring_${i}`, targets[0]);
+            }
+        }
     }
 </script>
 
@@ -310,8 +372,8 @@
     <div id="container" bind:this={container} >
         <!-- Vordefinierte Snap-Positionen (über top/left gesteuert) -->
         <div id="target_1" class="snap-target" style="left:  90px; top: 90px;">Ziel 1</div>
-        <div id="target_2" class="snap-target" style="left: 750px; top: 90px;">Ziel 2</div>
-        <div id="target_3" class="snap-target" style="left: 430px; top: 570px;">Ziel 3</div>
+        <div id="target_3" class="snap-target" style="left: 750px; top: 90px;">Ziel 3</div>
+        <div id="target_2" class="snap-target" style="left: 430px; top: 570px;">Ziel 2</div>
 
         <!-- Das ziehbare Element (Standard-Startposition) -->
         {#each { length: RING_COUNT } as x, i}
